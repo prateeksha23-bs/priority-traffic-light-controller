@@ -118,22 +118,22 @@ Normal sequence:
 Save as `priority_traffic_light_controller.v`.
 
 ```verilog
+
 `timescale 1ns / 1ps
 
 module priority_traffic_light_controller #(
-    parameter GREEN_TIME  = 100_000_000,
-    parameter YELLOW_TIME = 20_000_000,
-    parameter RED_TIME    = 10_000_000
+    parameter GREEN_TIME  = 500_000_000,
+    parameter YELLOW_TIME = 200_000_000,
+    parameter RED_TIME    = 100_000_000
 )(
-    input wire clk,
-    input wire reset,
-    input wire AMB_NS,
-    input wire AMB_EW,
+    input  wire clk,
+    input  wire reset,
+    input  wire AMB_NS,
+    input  wire AMB_EW,
 
     output reg NS_RED,
     output reg NS_YELLOW,
     output reg NS_GREEN,
-
     output reg EW_RED,
     output reg EW_YELLOW,
     output reg EW_GREEN
@@ -146,65 +146,53 @@ module priority_traffic_light_controller #(
     localparam S4_EW_YELLOW = 3'b100;
     localparam S5_ALL_RED_2 = 3'b101;
 
-    reg [2:0] current_state, next_state;
+    reg [2:0] current_state;
+    reg [2:0] next_state;
     reg [31:0] timer;
-
-    reg ns_request, ew_request;
+    reg ns_request;
+    reg ew_request;
 
     wire timer_done;
 
     assign timer_done =
-        ((current_state == S0_NS_GREEN)  && (timer >= GREEN_TIME - 1)) ||
-        ((current_state == S1_NS_YELLOW) && (timer >= YELLOW_TIME - 1)) ||
-        ((current_state == S2_ALL_RED_1) && (timer >= RED_TIME - 1)) ||
-        ((current_state == S3_EW_GREEN)  && (timer >= GREEN_TIME - 1)) ||
-        ((current_state == S4_EW_YELLOW) && (timer >= YELLOW_TIME - 1)) ||
-        ((current_state == S5_ALL_RED_2) && (timer >= RED_TIME - 1));
+    ((current_state == S0_NS_GREEN)  &&
+     (timer >= GREEN_TIME - 1))  ||
+     ((current_state == S1_NS_YELLOW) &&
+      (timer >= YELLOW_TIME - 1)) ||
+      ((current_state == S2_ALL_RED_1) &&
+      (timer >= RED_TIME - 1))    ||
+      ((current_state == S3_EW_GREEN)  &&
+      (timer >= GREEN_TIME - 1))  ||
+       ((current_state == S4_EW_YELLOW) &&
+         (timer >= YELLOW_TIME - 1)) ||
+        ((current_state == S5_ALL_RED_2) &&
+         (timer >= RED_TIME - 1));
 
-    // Timer
-    always @(posedge clk or posedge reset) begin
-        if (reset)
-            timer <= 0;
-        else if (timer_done)
-            timer <= 0;
-        else
-            timer <= timer + 1'b1;
-    end
-
-    // Capture ambulance requests and clear after service
     always @(posedge clk or posedge reset) begin
         if (reset) begin
             ns_request <= 1'b0;
             ew_request <= 1'b0;
-        end else begin
+        end
+        else begin
             if (AMB_NS)
                 ns_request <= 1'b1;
-            else if ((current_state == S0_NS_GREEN) && ns_request)
+            else if (current_state == S0_NS_GREEN)
                 ns_request <= 1'b0;
-
             if (AMB_EW)
                 ew_request <= 1'b1;
-            else if ((current_state == S3_EW_GREEN) && ew_request)
+            else if (current_state == S3_EW_GREEN)
                 ew_request <= 1'b0;
+
         end
     end
 
-    // State register
-    always @(posedge clk or posedge reset) begin
-        if (reset)
-            current_state <= S0_NS_GREEN;
-        else
-            current_state <= next_state;
-    end
-
-    // Next-state logic
     always @(*) begin
         next_state = current_state;
 
         case (current_state)
 
             S0_NS_GREEN: begin
-                if (ns_request)
+                if (AMB_NS || ns_request)
                     next_state = S0_NS_GREEN;
                 else if (timer_done)
                     next_state = S1_NS_YELLOW;
@@ -217,7 +205,7 @@ module priority_traffic_light_controller #(
 
             S2_ALL_RED_1: begin
                 if (timer_done) begin
-                    if (ns_request)
+                if (ns_request || AMB_NS)
                         next_state = S0_NS_GREEN;
                     else
                         next_state = S3_EW_GREEN;
@@ -225,7 +213,7 @@ module priority_traffic_light_controller #(
             end
 
             S3_EW_GREEN: begin
-                if (ew_request)
+                if (AMB_EW || ew_request)
                     next_state = S3_EW_GREEN;
                 else if (timer_done)
                     next_state = S4_EW_YELLOW;
@@ -238,7 +226,8 @@ module priority_traffic_light_controller #(
 
             S5_ALL_RED_2: begin
                 if (timer_done) begin
-                    if (ew_request)
+
+                    if (ew_request || AMB_EW)
                         next_state = S3_EW_GREEN;
                     else
                         next_state = S0_NS_GREEN;
@@ -251,8 +240,37 @@ module priority_traffic_light_controller #(
         endcase
     end
 
-    // Moore output logic
+    always @(posedge clk or posedge reset) begin
+        if (reset)
+            current_state <= S0_NS_GREEN;
+        else
+            current_state <= next_state;
+    end
+
+
+    always @(posedge clk or posedge reset) begin
+        if (reset) begin
+            timer <= 32'd0;
+        end
+        else if (current_state != next_state) begin
+            timer <= 32'd0;
+        end
+        else if ((current_state == S0_NS_GREEN) &&
+                 (AMB_NS || ns_request)) begin
+            timer <= 32'd0;
+        end
+        else if ((current_state == S3_EW_GREEN) &&
+                 (AMB_EW || ew_request)) begin
+            timer <= 32'd0;
+        end
+        else begin
+            timer <= timer + 1'b1;
+        end
+    end
+
     always @(*) begin
+
+        // Default outputs
         NS_RED    = 1'b0;
         NS_YELLOW = 1'b0;
         NS_GREEN  = 1'b0;
@@ -273,10 +291,11 @@ module priority_traffic_light_controller #(
                 EW_RED    = 1'b1;
             end
 
-            S2_ALL_RED_1: begin
+              S2_ALL_RED_1: begin
                 NS_RED = 1'b1;
                 EW_RED = 1'b1;
             end
+
 
             S3_EW_GREEN: begin
                 NS_RED   = 1'b1;
@@ -302,6 +321,7 @@ module priority_traffic_light_controller #(
     end
 
 endmodule
+
 ```
 
 ## 🧪 Testbench
@@ -407,20 +427,6 @@ endmodule
 
 The testbench uses shortened timer parameters so that state transitions are visible quickly during simulation. The hardware timing parameters are intended for a 100 MHz clock and should be adjusted as required.
 
-## 📁 Repository Structure
-
-```text
-priority-traffic-light-controller/
-├── rtl/
-│   └── priority_traffic_light_controller.v
-├── testbench/
-│   └── tb_priority_traffic_light_controller.v
-├── constraints/
-│   └── boolean_board.xdc
-├── images/
-│   └── boolean-board.png
-└── README.md
-```
 
 ## 🚀 Future Improvements
 
@@ -440,5 +446,26 @@ priority-traffic-light-controller/
 
 ---
 
-**Note:** Verify the RTL and testbench in Vivado before presenting this as a completed hardware implementation. In particular, test ambulance requests arriving during each yellow and all-red phase, and verify the request-clearing and simultaneous-request behavior.
+## ⚠️ Disclaimer
+
+This project was developed **strictly for educational and learning purposes** as part of exploring Verilog HDL, Finite State Machines (FSMs), and FPGA-based digital system design.
+
+The traffic light controller is a learning prototype intended to demonstrate basic traffic sequencing and ambulance-priority logic. It is **not designed, tested, or certified for deployment in real-world traffic control systems**.
+
+The design may require additional safety mechanisms, validation, and regulatory compliance before any real-world application.
+
+## 🎓 Learning Outcomes
+
+Through this project, I explored:
+- Designing a Moore FSM using Verilog HDL.
+- Implementing timed state transitions.
+- Understanding ambulance-priority logic.
+- Simulating and debugging digital designs using Xilinx Vivado.
+- Mapping RTL signals to physical FPGA pins and LEDs.
+
+**Built with curiosity, coded for learning, and driven by a passion for digital design and FPGA development. 🚦💻**
+
+---
+
+*This project is intended solely for academic demonstration and personal skill development.*
 
